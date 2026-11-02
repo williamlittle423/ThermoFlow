@@ -1,0 +1,29 @@
+# Local Python environment and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.env
+.env.*
+
+# Generated data, models, and previews
+/dataset/
+/benchmark_results*/
+/contact_sheets/
+/thermoflow_viewer.html
+*.npz
+*.npy
+*.gif
+*.mp4
+*.pt
+*.pth
+*.ckpt
+*.pdf
+/dataset_splits/split_overview.png
+
+# Local machine/editor files
+.DS_Store
+.vscode/
+.idea/

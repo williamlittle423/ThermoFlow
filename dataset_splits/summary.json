@@ -1,0 +1,194 @@
+{
+  "method": "k-means++ on standardized single-cube center (x,y,z)",
+  "restarts": 30,
+  "iterations": 100,
+  "seed": 42,
+  "background_k": 0.2,
+  "dataset": "/Users/williamlittle/Documents/Cloud_Documents/UH/F26/ICS691C/ThermoFlow/dataset",
+  "samples": 281,
+  "unique_geometries": 276,
+  "duplicate_samples": 5,
+  "counts": {
+    "train": 221,
+    "validation": 31,
+    "test": 29
+  },
+  "validation_cluster": 1,
+  "test_cluster": 8,
+  "feature_mean_mm": [
+    12.61413043478261,
+    12.994565217391305,
+    3.0416666666666665
+  ],
+  "feature_scale_mm": [
+    5.855492556944807,
+    5.91079271021561,
+    0.7129008745995689
+  ],
+  "centroids_standardized": [
+    [
+      -1.212362384648832,
+      0.7340416638944797,
+      0.7704330907868917
+    ],
+    [
+      -1.1543506646743915,
+      -0.6376063161993253,
+      -1.0086760265363426
+    ],
+    [
+      -1.125065838824363,
+      -1.259041553865027,
+      0.7905678212902154
+    ],
+    [
+      -0.43309856687885695,
+      0.9155598999869667,
+      -0.6283014688658618
+    ],
+    [
+      0.04540515808564398,
+      -0.0735206322901912,
+      1.0917833896199347
+    ],
+    [
+      0.5013872934968302,
+      -1.3440777924187275,
+      0.5727771530125995
+    ],
+    [
+      0.712891539538896,
+      -0.8807792683935726,
+      -1.083510940942202
+    ],
+    [
+      0.8161101156907471,
+      0.8770407736039562,
+      -1.2357291347793695
+    ],
+    [
+      0.8280827754497749,
+      1.1381987720874602,
+      0.9806048764728179
+    ],
+    [
+      1.2442795365824708,
+      -0.0024641732683555917,
+      0.10987969874119283
+    ]
+  ],
+  "inertia": 178.29282757567677,
+  "clusters": [
+    {
+      "cluster": 0,
+      "split": "train",
+      "samples": 34,
+      "unique_geometries": 33,
+      "center_mm": [
+        5.5151515151515165,
+        17.333333333333332,
+        3.590909090909091
+      ]
+    },
+    {
+      "cluster": 1,
+      "split": "validation",
+      "samples": 31,
+      "unique_geometries": 31,
+      "center_mm": [
+        5.854838709677419,
+        9.225806451612904,
+        2.32258064516129
+      ]
+    },
+    {
+      "cluster": 2,
+      "split": "train",
+      "samples": 19,
+      "unique_geometries": 19,
+      "center_mm": [
+        6.026315789473686,
+        5.552631578947369,
+        3.6052631578947367
+      ]
+    },
+    {
+      "cluster": 3,
+      "split": "train",
+      "samples": 34,
+      "unique_geometries": 32,
+      "center_mm": [
+        10.078125,
+        18.40625,
+        2.59375
+      ]
+    },
+    {
+      "cluster": 4,
+      "split": "train",
+      "samples": 25,
+      "unique_geometries": 25,
+      "center_mm": [
+        12.88,
+        12.56,
+        3.82
+      ]
+    },
+    {
+      "cluster": 5,
+      "split": "train",
+      "samples": 30,
+      "unique_geometries": 30,
+      "center_mm": [
+        15.55,
+        5.050000000000001,
+        3.4499999999999997
+      ]
+    },
+    {
+      "cluster": 6,
+      "split": "train",
+      "samples": 26,
+      "unique_geometries": 26,
+      "center_mm": [
+        16.78846153846154,
+        7.788461538461538,
+        2.269230769230769
+      ]
+    },
+    {
+      "cluster": 7,
+      "split": "train",
+      "samples": 28,
+      "unique_geometries": 28,
+      "center_mm": [
+        17.392857142857146,
+        18.178571428571427,
+        2.1607142857142856
+      ]
+    },
+    {
+      "cluster": 8,
+      "split": "test",
+      "samples": 29,
+      "unique_geometries": 27,
+      "center_mm": [
+        17.462962962962962,
+        19.72222222222222,
+        3.7407407407407405
+      ]
+    },
+    {
+      "cluster": 9,
+      "split": "train",
+      "samples": 25,
+      "unique_geometries": 25,
+      "center_mm": [
+        19.9,
+        12.98,
+        3.12
+      ]
+    }
+  ],
+  "note": "Spatial holdout, not an IID random split. Cluster sizes are unequal. Lists contain filenames relative to dataset. Snapshot is frozen; newly generated samples are not included. Do not refit splits after model evaluation."
+}
