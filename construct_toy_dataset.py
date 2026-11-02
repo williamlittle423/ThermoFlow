@@ -242,7 +242,8 @@ def _generate_one(job):
             temporary = Path(handle.name)
             np.savez_compressed(handle, video=video, conductivity=field,
                                 frame_times=FRAME_TIMES, cell_size=CELL_SIZE,
-                                seed=params["seed"], sample_index=index, config_json=config)
+                                seed=params["seed"], sample_index=index,
+                                n_cubes=params["n_cubes"], config_json=config)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
@@ -255,12 +256,14 @@ def _generate_one(job):
 def generate_dataset(count=1, output="dataset", *, seed=0, start_index=0,
                      nx=48, ny=48, nz=12, dt=.5, n_cubes=2, cube_cells=4,
                      heat_flux=800., heat_capacity=1.5e6, resume=False,
-                     verbose=False, workers=1):
+                     verbose=False, workers=1, cube_count_range=None):
     """Generate independent samples, with cached solves and optional worker processes.
 
     Sample index i uses seed + i, so resuming or extending a batch preserves
     specimen identity. Existing files are never overwritten. --resume verifies
     saved settings and arrays before skipping a completed sample.
+    cube_count_range=(low, high) selects an inclusive uniform cube count per
+    specimen using a separate deterministic random stream; it overrides n_cubes.
     """
     import json
     import os
@@ -272,9 +275,23 @@ def generate_dataset(count=1, output="dataset", *, seed=0, start_index=0,
                                  ("cube_cells", cube_cells, 1)):
         if not isinstance(value, (int, np.integer)) or value < minimum:
             raise ValueError(f"{name} must be an integer >= {minimum}")
+    if cube_count_range is not None:
+        if (len(cube_count_range) != 2 or any(
+                not isinstance(v, (int, np.integer)) or v < 0 for v in cube_count_range)
+                or cube_count_range[0] > cube_count_range[1]):
+            raise ValueError("cube_count_range must be two ordered nonnegative integers")
+        cube_count_range = tuple(int(v) for v in cube_count_range)
+    maximum_cubes = n_cubes if cube_count_range is None else cube_count_range[1]
+    # Reject impossible cell-volume requests early. This is a necessary bound,
+    # not a packing proof; createCell enforces the actual skin and gap constraints
+    # and reports placement failures rather than silently reducing the count.
+    interior = np.array([nx, ny, nz])-4
+    if maximum_cubes and (np.any(interior < cube_cells)
+                          or maximum_cubes*cube_cells**3 > np.prod(np.maximum(interior, 0))):
+        raise ValueError("Requested cubes cannot fit inside the background skin")
     if not np.isfinite([dt, heat_flux, heat_capacity]).all() or dt <= 0 or heat_flux < 0 or heat_capacity <= 0:
         raise ValueError("Require finite dt > 0, heat_flux >= 0, heat_capacity > 0")
-    if n_cubes and min(nx, ny, nz) < cube_cells + 4:
+    if maximum_cubes and min(nx, ny, nz) < cube_cells + 4:
         raise ValueError("Cubes do not fit inside the two-cell background skin")
     output = Path(output).expanduser()
     output.mkdir(parents=True, exist_ok=True)
@@ -290,14 +307,25 @@ def generate_dataset(count=1, output="dataset", *, seed=0, start_index=0,
                     k_background=.20, k_cube=.50, cell_size=CELL_SIZE,
                     frame_times=FRAME_TIMES.tolist(),
                     solver="Cached sparse LU backward Euler")
+    if cube_count_range is not None:
+        settings.pop("n_cubes")
+        settings.update(cube_count_range=list(cube_count_range),
+                        cube_count_sampling="uniform_seedsequence_v1")
     # Validate all existing samples before scheduling new work.
     jobs_to_run = []
     skipped = 0
     for index, path in jobs:
-        params = dict(nx=nx, ny=ny, nz=nz, dt=dt, n_cubes=n_cubes,
+        sample_seed = seed+index
+        # Keep count sampling independent from the cube-position RNG. Results
+        # are unchanged by worker count, task order, or resuming a partial run.
+        selected_cubes = n_cubes if cube_count_range is None else int(
+            np.random.default_rng(np.random.SeedSequence([sample_seed, 0x54464C57])).integers(
+                cube_count_range[0], cube_count_range[1]+1))
+        specimen_settings = dict(settings, n_cubes=selected_cubes, seed=sample_seed)
+        params = dict(nx=nx, ny=ny, nz=nz, dt=dt, n_cubes=selected_cubes,
                       cube_cells=cube_cells, seed=seed+index,
                       heat_flux=heat_flux, heat_capacity=heat_capacity)
-        config = json.dumps(dict(settings, seed=seed+index), sort_keys=True)
+        config = json.dumps(specimen_settings, sort_keys=True)
         if path.exists():
             with np.load(path, allow_pickle=False) as data:
                 saved = json.loads(str(data["config_json"].item())) if "config_json" in data else {}
@@ -306,7 +334,7 @@ def generate_dataset(count=1, output="dataset", *, seed=0, start_index=0,
                 known_solvers = {"FiPy backward Euler LinearLUSolver", "Cached sparse LU backward Euler"}
                 equivalent = saved.get("solver") in known_solvers
                 saved["solver"] = settings["solver"]
-                if (not equivalent or saved != dict(settings, seed=seed+index)
+                if (not equivalent or saved != specimen_settings
                         or data["video"].shape != (len(FRAME_TIMES), ny, nx)
                         or data["conductivity"].shape != (nz, ny, nx)
                         or not np.array_equal(data["frame_times"], FRAME_TIMES)
@@ -375,7 +403,11 @@ def main():
     parser.add_argument("--output", default="dataset", help="Destination folder (default: dataset)")
     parser.add_argument("--seed", type=int, default=0, help="Base seed; specimen i uses seed+i")
     parser.add_argument("--start-index", type=int, default=0, help="First sample index")
-    parser.add_argument("--cubes", dest="n_cubes", type=int, default=2, help="Cubes per specimen (default: 2)")
+    counts = parser.add_mutually_exclusive_group()
+    counts.add_argument("--cubes", dest="n_cubes", type=int, default=2,
+                        help="Fixed cubes per specimen (default: 2)")
+    counts.add_argument("--cube-count-range", type=int, nargs=2, metavar=("MIN", "MAX"),
+                        help="Uniform inclusive cube-count range, sampled independently for each specimen")
     parser.add_argument("--cube-cells", type=int, default=4, help="Cube side length in cells")
     parser.add_argument("--nx", type=int, default=48)
     parser.add_argument("--ny", type=int, default=48)
