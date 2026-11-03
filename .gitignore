@@ -11,8 +11,12 @@ __pycache__/
 # Generated data, models, and previews
 /dataset/
 /benchmark_results*/
+/cluster_benchmark*/
+/datasets/
 /contact_sheets/
 /thermoflow_viewer.html
+/build_viewer.py
+/viewer_template.html
 *.npz
 *.npy
 *.gif
@@ -27,3 +31,10 @@ __pycache__/
 .DS_Store
 .vscode/
 .idea/
+
+# Local interactive viewers
+/local_viewers/
+
+# Training runs and dataset transfer archives
+/runs/
+*.zip

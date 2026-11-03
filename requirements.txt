@@ -3,3 +3,4 @@ scipy>=1.15
 fipy>=4.0
 matplotlib>=3.8
 pillow>=10
+torch>=2.2

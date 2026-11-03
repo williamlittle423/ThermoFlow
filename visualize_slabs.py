@@ -2,7 +2,6 @@
 
 Examples:
     python visualize_slabs.py sample_0000.npz
-    python visualize_slabs.py shallow.npz --compare deep.npz --noise-std 0.05
     python visualize_slabs.py sample_0000.npz --gif preview.gif --no-show
     python visualize_slabs.py sample_0000.npz --frame 5 --snapshot frame.png --no-show
 
@@ -156,136 +155,10 @@ def load_sample(path):
                 float(data["cell_size"]) if "cell_size" in data else .0005)
 
 
-def compare_samples(samples, background_k=.20, frame=0, noise_std=0,
-                    noise_seed=0, contrast_limit_mk=None):
-    """Synchronized comparison with shared scales across every case and time.
-
-    Noise is synthetic, independent Gaussian pixel noise, added once to a copy.
-    Spatial RMS and width describe surface contrast, not reconstruction accuracy.
-    """
-    times = np.asarray(samples[0][3], dtype=float)
-    if (times.ndim != 1 or not len(times) or not np.isfinite(times).all()
-            or np.any(np.diff(times) <= 0) or not 0 <= frame < len(times)):
-        raise ValueError("Invalid frame times or starting frame")
-    rng = np.random.default_rng(noise_seed)
-    cases = []
-    for name, video, field, t, spacing in samples:
-        video, field = np.asarray(video, float), np.asarray(field, float)
-        if (video.ndim != 3 or field.ndim != 3 or video.shape[1:] != field.shape[1:]
-                or video.shape[0] != len(times) or np.shape(t) != times.shape
-                or not np.allclose(t, times) or not np.isfinite(video).all()
-                or not np.isfinite(field).all() or not np.isfinite(spacing) or spacing <= 0):
-            raise ValueError("Samples need finite, compatible fields and identical frame times")
-        # Preserve the clean simulation for a direct before/after noise comparison.
-        measured = video + rng.normal(0, noise_std, video.shape) if noise_std else video.copy()
-        clean = video - video.mean(axis=(1, 2), keepdims=True)
-        contrast = measured - measured.mean(axis=(1, 2), keepdims=True)
-        rms = np.sqrt(np.mean(clean**2, axis=(1, 2))) * 1000
-        noisy_rms = np.sqrt(np.mean(contrast**2, axis=(1, 2))) * 1000
-        # RMS radius of absolute contrast around its weighted centroid (mm).
-        yy, xx = np.indices(video.shape[1:], dtype=float)
-        xx, yy = (xx + .5)*spacing*1000, (yy + .5)*spacing*1000
-        weights = np.abs(clean)
-        total = weights.sum(axis=(1, 2))
-        denom = np.maximum(total, np.finfo(float).tiny)
-        cx = (weights*xx).sum(axis=(1, 2))/denom
-        cy = (weights*yy).sum(axis=(1, 2))/denom
-        radius = np.sqrt((weights*((xx-cx[:, None, None])**2 +
-                                   (yy-cy[:, None, None])**2)).sum(axis=(1, 2))/denom)
-        radius[total < 1e-12] = np.nan
-        mask = ~np.isclose(field, background_k, rtol=1e-5, atol=1e-8)
-        depths = np.where(mask, np.arange(field.shape[0])[:, None, None]*spacing*1000, np.inf)
-        depth_map = depths.min(axis=0)
-        depth_map[~np.isfinite(depth_map)] = np.nan
-        cases.append((name, measured, contrast*1000, rms, noisy_rms, radius,
-                      depth_map, spacing, field.shape[0]))
-    limit = contrast_limit_mk or max(1e-3, max(np.abs(c[2]).max() for c in cases))
-    low, high = min(c[1].min() for c in cases), max(c[1].max() for c in cases)
-    if high-low < 1e-8:
-        low, high = low-.01, high+.01
-    depth_max = max(c[7]*c[8]*1000 for c in cases)
-    rms_max = max(max(c[3].max(), c[4].max()) for c in cases)
-    fig, axes = plt.subplots(len(cases), 4, squeeze=False,
-                             figsize=(18, max(5.5, 3.8*len(cases))))
-    fig.subplots_adjust(left=.045, right=.95, bottom=.19, top=.86, wspace=.65, hspace=.55)
-    fig.suptitle(f"ThermoFlow | synchronized surface comparison | noise σ = {noise_std:g} K", y=.98)
-    fig.text(.5, .925, "Shared image scales across all samples and frames. Ground-truth depth is not an observed input.", ha="center")
-    artists, cursors = [], []
-    for row, c in zip(axes, cases):
-        name, measured, contrast, rms, noisy_rms, radius, depth_map, spacing, nz = c
-        ny, nx = measured.shape[1:]
-        extent = (0, nx*spacing*1000, 0, ny*spacing*1000)
-        depth_image = row[0].imshow(depth_map, origin="lower", extent=extent,
-                                    vmin=0, vmax=depth_max, cmap="viridis_r")
-        row[0].set_title(f"{name}\nNearest inclusion depth (ground truth)")
-        a = row[1].imshow(measured[frame], origin="lower", extent=extent,
-                           vmin=low, vmax=high, cmap="inferno")
-        b = row[2].imshow(contrast[frame], origin="lower", extent=extent,
-                           vmin=-limit, vmax=limit, cmap="RdBu_r")
-        for ax in row[:3]:
-            ax.set(xlabel="x (mm)", ylabel="y (mm)")
-        fig.colorbar(depth_image, ax=row[0], shrink=.75, label="Depth (mm)")
-        fig.colorbar(a, ax=row[1], shrink=.75, label="Temperature rise (K)")
-        fig.colorbar(b, ax=row[2], shrink=.75, label="Contrast (mK)")
-        ax = row[3]
-        ax.plot(times, rms, label="Clean RMS contrast", color="tab:blue")
-        if noise_std:
-            ax.plot(times, noisy_rms, label="With noise", color="tab:orange", alpha=.8)
-        ax.set(xlabel="Time after heating (s)", ylabel="Spatial RMS contrast (mK)",
-               ylim=(0, max(rms_max*1.15, .001)))
-        ax.grid(alpha=.2)
-        twin = ax.twinx()
-        twin.plot(times, radius, "--", color="tab:green", label="Clean contrast radius")
-        twin.set_ylabel("Contrast RMS radius (mm)", color="tab:green")
-        twin.set_ylim(0, max(np.hypot(d[1].shape[1], d[1].shape[2])*d[7]*1000 for d in cases)/2)
-        lines = ax.lines + twin.lines
-        ax.legend(lines, [line.get_label() for line in lines], fontsize=7, loc="best")
-        peak = int(np.argmax(rms))
-        ax.set_title(f"Clean peak: {rms[peak]:.2f} mK at {times[peak]:.2f} s")
-        print(f"{name}: peak spatial RMS={rms[peak]:.4g} mK at τ={times[peak]:.4g} s; "
-              f"clean RMS radius={radius[peak]:.4g} mm; assumed pixel noise σ={noise_std*1000:g} mK")
-        cursor = ax.axvline(times[frame], color="gray", linestyle=":")
-        artists.append((a, b, row[1], row[2], measured, contrast))
-        cursors.append(cursor)
-    slider = Slider(fig.add_axes((.22, .085, .60, .025)), "Frame", 0,
-                    max(1, len(times)-1), valinit=frame, valstep=1, valfmt="%0.0f")
-    if len(times) == 1:
-        slider.set_active(False)
-    fig.text(.5, .025, "Contrast subtracts the frame mean, not a defect-free reference. Radius is descriptive; noise RMS is not a detection threshold.",
-             ha="center", fontsize=9)
-    def update(index):
-        index = int(index)
-        if not 0 <= index < len(times):
-            raise ValueError("Frame index out of range")
-        result = []
-        for a, b, ta, tb, measured, contrast in artists:
-            a.set_data(measured[index]); b.set_data(contrast[index])
-            ta.set_title(f"Surface | τ = {times[index]:.2f} s")
-            tb.set_title("Spatial contrast")
-            result.extend((a, b))
-        for cursor in cursors:
-            cursor.set_xdata([times[index]]*2)
-        return tuple(result + cursors)
-    def on_slider(value):
-        update(min(int(value), len(times)-1))
-        fig.canvas.draw_idle()
-    slider.on_changed(on_slider)
-    update(frame)
-    fig._thermoflow_slider = slider
-    return fig, update, slider
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("sample", type=Path, help="NPZ saved by simulate.py")
-    parser.add_argument("--compare", type=Path, nargs="+",
-                        help="Additional samples; synchronized views share color scales")
-    parser.add_argument("--noise-std", type=float, default=0,
-                        help="Independent Gaussian pixel noise standard deviation, K")
-    parser.add_argument("--noise-seed", type=int, default=0)
-    parser.add_argument("--contrast-limit-mk", type=float,
-                        help="Fixed symmetric contrast limit for repeatable comparisons")
+    parser.add_argument("sample", type=Path, help="NPZ saved by construct_toy_dataset.py")
     parser.add_argument("--snapshot", type=Path, help="Save the selected frame as an image")
     parser.add_argument("--gif", type=Path, help="Save all frames as an animated GIF")
     parser.add_argument("--frame", type=int, default=0)
@@ -301,16 +174,9 @@ def main():
         parser.error("--no-show requires --snapshot or --gif")
     if args.no_show:
         plt.switch_backend("Agg")
-    if not np.isfinite(args.noise_std) or args.noise_std < 0:
-        parser.error("--noise-std must be finite and nonnegative")
-    if args.contrast_limit_mk is not None and (
-            not np.isfinite(args.contrast_limit_mk) or args.contrast_limit_mk <= 0):
-        parser.error("--contrast-limit-mk must be finite and positive")
-    samples = [load_sample(path) for path in [args.sample, *(args.compare or [])]]
-    fig, update, slider = compare_samples(
-        samples, args.background_k, args.frame, args.noise_std,
-        args.noise_seed, args.contrast_limit_mk)
-    video = samples[0][1]
+    _, video, field, times, spacing = load_sample(args.sample)
+    fig, update, slider = visualize(video, field, times, spacing,
+                                    args.background_k, args.frame)
     if args.snapshot:
         args.snapshot.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(args.snapshot, dpi=160)

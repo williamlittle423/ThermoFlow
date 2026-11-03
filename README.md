@@ -6,7 +6,7 @@ ThermoFlow investigates reconstruction of internal thermal conductivity from a s
 
 Heat diffusion attenuates internal spatial structure before it reaches the observed boundary. Finite recording duration, spatial resolution, and measurement noise can therefore make reconstruction unstable or ambiguous. The central question is whether conditional generation can recover material structure while representing uncertainty in features that the measurements constrain weakly.
 
-The current implementation provides synthetic data generation, geometry-based dataset partitioning, and visualization. Model training and probabilistic evaluation are planned components.
+The current implementation provides synthetic data generation, dataset partitioning, visualization, and a deterministic ThermoNet reconstruction baseline. Conditional flow matching and probabilistic evaluation are planned components.
 
 ## Physical model and numerical method
 
@@ -56,7 +56,22 @@ python construct_toy_dataset.py \
 
 Sample index `i` uses `--seed + i`. `--count 1000` requests indices 0–999; `--resume` verifies existing settings and skips compatible files. Workers simulate independent specimens and write compressed NPZ files through temporary files followed by atomic rename. Stop an earlier run before launching another against the same indices.
 
-`--cubes`, `--cube-cells`, `--nx`, `--ny`, `--nz`, `--dt`, `--heat-flux`, and `--heat-capacity` control the simulation. The CLI defaults to two cubes; the command above explicitly selects the initial single-cube benchmark. Use a separate output directory when changing physical or numerical settings. Larger timesteps require an accuracy comparison, particularly for the early frames.
+`--cubes` (fixed count) or `--cube-count-range MIN MAX` (inclusive uniform count per specimen), `--cube-cells`, `--nx`, `--ny`, `--nz`, `--dt`, `--heat-flux`, and `--heat-capacity` control the simulation. The CLI defaults to two cubes; the command above explicitly selects the initial single-cube benchmark. Use a separate output directory when changing physical or numerical settings. Larger timesteps require an accuracy comparison, particularly for the early frames.
+
+### Concurrent cohort benchmark
+
+Run the three planned cohorts together: one cube, two cubes, and a uniformly sampled count from 3 through 10. Each cohort has its own output directory and independent seed offset. Counts and positions are deterministic across worker counts and resumed runs. The realized count is saved as `n_cubes` and in `config_json`; mixed samples also record the sampling range and method. Placement failures are reported, never replaced with a smaller count.
+
+On a compute node with at least six CPU cores available (eight gives room for controller overhead):
+
+```bash
+python benchmark_cluster.py --samples 50 --workers-per-group 2 \
+  --target 2500 --output cluster_benchmark
+```
+
+This generates **50 specimens per cohort**, with six solver workers running concurrently. Numerical-library threads are limited to one per worker. Separate logs and a `report.json` record wall time, throughput, realized cube-count histograms, and projected durations for 2,500 specimens per cohort. The combined projection is the maximum cohort duration because all three run concurrently. Extrapolations assume comparable resource and filesystem conditions; they are not guaranteed completion times.
+
+The script prints resume commands that extend the same cohort folders to 2,500 specimens, reusing the benchmark samples. Launch those commands concurrently inside the same kind of allocation if extending the run. An existing benchmark output directory is rejected to avoid misleading timings. Use a new directory for each throughput experiment. The driver does not request scheduler resources and stays on one node; a cluster's total core count is not the same as an individual job's allocation.
 
 ### Sample format
 
@@ -69,6 +84,7 @@ Each `sample_XXXX.npz` contains:
 | `frame_times` | `(20,)` | Seconds after heater switch-off |
 | `cell_size` | Scalar | Cell width in metres |
 | `seed`, `sample_index` | Scalars | Specimen identifiers |
+| `n_cubes` | Scalar | Realized inclusion count (newly generated samples) |
 | `config_json` | JSON string | Acquisition and simulation settings |
 
 Depth increases away from the observed surface. Frame zero is the end of the heating pulse, after the interior has already influenced the thermal response. The generator saves clean observations; measurement noise can be added during training or evaluation without changing the underlying specimen.
@@ -94,6 +110,49 @@ python cluster_dataset.py dataset --output dataset_splits_new --seed 42
 ```
 
 Preserve the selected partitions throughout model comparison. Fit model preprocessing on training data and use validation data for tuning.
+
+## ThermoNet baseline training
+
+`ThermoNet` is a compact 2D U-Net that maps recording times to input channels and depth slices to output channels: `(B, 20, 48, 48)` videos become `(B, 12, 48, 48)` inclusion logits. `predict_proba()` applies sigmoid; with the default materials, a conductivity estimate is `0.20 + 0.30 * probability`.
+
+```bash
+python train_thermonet.py --data datasets/single_cube \
+  --output runs/single_cube --epochs 100 --batch-size 16 --cache
+```
+
+The script uses CUDA, Apple MPS, or CPU according to availability. Set `--device cuda` to require an NVIDIA GPU. `--cache` stores the clean videos and masks in system RAM. For a short CPU pipeline check, use a new output directory with `--limit 32 --epochs 2 --base-channels 8 --device cpu`.
+
+Training constructs a new **geometry-grouped random 70/15/15 split** of the supplied single-cube dataset, keeping duplicate interiors together. It does not reuse the earlier 281-specimen spatial holdout. The frozen split, specimen content hashes and acquisition settings are saved in `manifest.json`. All specimens must contain one solid axis-aligned cube with consistent grid, material, and acquisition settings.
+
+A global temperature mean and standard deviation are fitted on training data only; there is no per-video min/max scaling. The objective is class-weighted binary cross-entropy with logits plus soft Dice. Class weighting is calculated from the training voxel counts. `--noise-std 0.05` adds Gaussian observation noise in kelvin before normalization: training noise changes each epoch, while validation/test noise remains fixed. Start a separate run when changing the noise setting.
+
+Validation loss controls best-checkpoint selection and early stopping. The test set is evaluated after training using the best validation checkpoint. Outputs include `best.pt`, `last.pt`, `history.json`, final test metrics, per-specimen scores, and a breakdown by true inclusion front depth. Reported centroid depth error is conditional on a nonempty thresholded prediction; the evaluated fraction is recorded so missed defects are not counted as successful localization.
+
+Resume an interrupted run with matching training settings:
+
+```bash
+python train_thermonet.py --data datasets/single_cube \
+  --output runs/single_cube --epochs 100 --batch-size 16 --cache \
+  --resume runs/single_cube/last.pt
+```
+
+The checkpoint restores model and optimizer state, history, and the validation stopping state. It must match the dataset and training settings. A new run refuses to overwrite a nonempty output directory. GPU execution is not claimed to be bitwise reproducible across hardware.
+
+For Colab, open `train_thermonet_colab.ipynb` and follow its setup cells. The notebook stages an archive onto the runtime's local disk and saves checkpoints to Drive. Only NumPy and PyTorch are needed for the training script; FiPy is not imported. Training outputs are excluded from Git.
+
+### All-cohort training
+
+Train a fresh model on the single-, two-, and 3–10-cube cohorts:
+
+```bash
+python train_thermonet_all.py --data datasets \
+  --single-checkpoint best_single.pt --output runs/all_cohorts \
+  --epochs 100 --batch-size 16 --cache
+```
+
+The original checkpoint supplies split metadata only; its weights are not loaded. This preserves the earlier single-cube holdout. Other geometries are split by cube count with duplicate interiors kept together. Final metrics are reported per cohort and per cube count, including object recovery. Set `--data cluster_benchmark_2w` when using the original cohort folders on Moana. For CPU training, add `--device cpu --cpu-threads 8`; the default device selection also supports CUDA and MPS.
+
+See [the all-cohort protocol](docs/all_cohort_training.md) and `train_thermonet_all_colab.ipynb` for setup and resume instructions. Checkpoints and datasets are transferred separately from Git.
 
 ## Visualization
 
